@@ -1,0 +1,155 @@
+---
+title: "SEM数据探索"
+output:
+  html_document:
+    df_print: kable
+    keep_md: yes
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.width = 12)
+pks <- c("dplyr", "ggplot2", "tidyr", "knitr", "grid", "wordcloud")
+lapply(X = pks, FUN = require, character.only = TRUE)
+old <- theme_grey() + theme(text = element_text(family = "STXihei", size = 9))
+theme_set(old)
+```
+
+```{r data, cache=TRUE}
+# Berlin post-processed data
+sem <- readRDS("sem.RDS")
+
+sem <- sem %>% mutate(date = as.Date(日期),
+                      key_words = as.character(关键词),
+                      ctr = as.numeric(gsub(x = as.character(点击率), 
+                                             pattern = "%", replacement = "")))
+```
+
+<br>
+<hr>
+## 原始数据
+
+SEM数据包含13个数据维度，其中日期范围为
+2017/7/1 - 2017/7/31，11个推广计划，70个推广单元，1287个关键词，百度推广账户层级由大到小的顺序是：计划>单元>关键词。
+
+```{r }
+sem %>% group_by(推广计划, 推广单元) %>% 
+  summarise(关键词数量 = n_distinct(关键词)) %>% 
+  DT::datatable(rownames = FALSE, option = list())
+```
+<br>
+<hr>
+
+相同的关键词可能会出现在不同的推广计划／单元，不同的关键词投放的时间也不尽相同。下图是关键词投放天数的数量分布，红色虚线表示50%的关键词投放天数不足15天，黑色虚线表示相应投放天数的关键词的平均展现数量。
+
+```{r}
+sem %>% group_by(关键词) %>% 
+  summarise(day = n_distinct(date), display = sum(展现)) %>% 
+  mutate(avg_day_display = round(display/day)) %>% 
+  group_by(day) %>% 
+  summarise(count = n_distinct(关键词), avg = round(mean(avg_day_display))) %>% 
+  ggplot(aes(x = day)) + 
+  geom_bar(aes(y = count), stat = "identity") +
+  geom_line(aes(y = avg), linetype = "dashed") +
+  geom_vline(xintercept = 13, colour = "darkred", linetype = "dashed")
+```
+
+观察关键词随时间变化的量化指标趋势如下：
+
+```{r}
+sem %>% group_by(date) %>% 
+  summarise(display = sum(展现),
+            click = sum(点击), cost = sum(消费)) %>% 
+  mutate(ctr = round(click/display, 4) * 100) %>% 
+  tidyr::gather(var, count, -date) %>%
+  mutate(var = factor(var, levels = c("display", "click", "ctr", "cost"), ordered = TRUE)) %>%
+    ggplot(aes(date, count)) +
+    geom_line() +
+    geom_smooth(method = "lm", se = FALSE, lty = 3, col = "royalblue") +
+    facet_wrap(~var, scales = "free_y", 
+               labeller = as_labeller(c(display = "Displays", click = "Clicks", 
+                                        cost = "Costs", ctr = "CTR")))
+
+```
+
+随着时间变化，每日投放的关键词展现数量在增加，点击量基本保存不变，点击率出现下降趋势，但消费金额却在增加。因此，选择展现和点击作为选择关键词投放效果的评价指标。
+
+<hr>
+
+## 按展现量筛选
+
+关键词的展现次数表示被搜索展示的次数，观察关键词展现量的分布如下：
+
+```{r}
+sem %>% group_by(关键词) %>% 
+  summarise(display = sum(展现)) %>% 
+  ggplot(aes(x = display)) + geom_histogram(bins = 50)
+
+```
+
+展现量呈现极端右偏分布，90%的关键词展现数量分布集中在1000以下。
+
+```{r}
+sem %>% group_by(关键词) %>% 
+  summarise(display = sum(展现)) %>% 
+  select(display) %>% 
+  lapply(quantile, probs = c(0.25, 0.5, 0.75, 0.9, 0.95)) %>% 
+  as.data.frame() %>% t() %>% 
+  as.data.frame()
+```
+<hr>
+
+```{r}
+sem %>% group_by(关键词) %>% 
+  summarise(display = sum(展现)) %>% 
+  filter(display < 100) %>% 
+  ggplot(aes(x = display)) + geom_histogram(bins = 50) +
+  geom_vline(xintercept = 6, colour = "darkblue", linetype = "dashed") +
+  geom_vline(xintercept = 24, colour = "darkred", linetype = "dashed")
+```
+
+蓝色虚线为30%分位数（展现量为6），红色为50%分位数（展现量为24）。7月整体投放的所有关键词中有一半的关键词展现量不足25。
+
+## 按点击率筛选
+
+将关键词中展现量排名靠后的30%剔除之后，观察点击率分布：
+
+```{r}
+temp1 <- sem %>% group_by(key_words) %>% 
+  summarise(n = n_distinct(date),
+            display = sum(展现), click = sum(点击), 
+            cost = sum(消费), rate = click/display) %>% 
+  filter(display > 6)
+
+temp1 %>% 
+select(rate) %>% 
+  lapply(quantile, probs = c(0.25, 0.5, 0.75, 0.9, 0.95)) %>% 
+  as.data.frame() %>% t() %>% 
+  as.data.frame()
+
+temp1 %>% ggplot(aes(x = rate)) +
+  geom_histogram(bins = 50) +
+  geom_vline(xintercept = 0.033364226, colour = "darkred", linetype = "dashed")
+  
+```
+<hr>
+
+点击率同样呈现右偏分布，红色虚线处是50%分位数，表明一半以上的关键词点击率不足5%。
+
+## 结果展示
+
+先后通过展现和点击剔除数值较低的关键词，最终得到450个关键词。其中点击量超过30的关键词如下：
+
+```{r}
+temp2 <- temp1 %>% filter(rate > 0.033364226) %>% 
+  mutate(rate = round(rate, 4)) %>% 
+  arrange(desc(click)) 
+
+wordcloud(temp2$key_words, temp2$click, min.freq = 30, colors = brewer.pal(8, "Dark2"), family = "STXihei")
+
+
+```
+> *其他关键词详见附件*
+
+
+
