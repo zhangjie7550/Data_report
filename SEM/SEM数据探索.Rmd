@@ -11,17 +11,23 @@ output:
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.width = 12)
 pks <- c("dplyr", "ggplot2", "tidyr", "knitr", "grid", "wordcloud")
 lapply(X = pks, FUN = require, character.only = TRUE)
-old <- theme_grey() + theme(text = element_text(family = "STXihei", size = 9))
+old <- theme_grey() + theme(text = element_text(family = "STXihei"))
 theme_set(old)
 ```
 
 ```{r data, cache=TRUE}
-# Berlin post-processed data
+#  load data
 sem <- readRDS("sem.RDS")
 
-sem <- sem %>% mutate(date = as.Date(日期),
-                      key_words = as.character(关键词),
-                      ctr = as.numeric(gsub(x = as.character(点击率), 
+names(sem) <- c("date", "keywords", "unit", "plan", "display", 
+                "click", "cost", "ctr","avg_click_cost",
+                "web", "busi", "phone", "sort")
+
+sem <- sem %>% mutate(date = as.Date(date),
+                      keywords = as.character(keywords),
+                      unit = as.character(unit),
+                      plan = as.character(plan),
+                      ctr = as.numeric(gsub(x = as.character(ctr), 
                                              pattern = "%", replacement = "")))
 ```
 
@@ -33,21 +39,28 @@ SEM数据包含13个数据维度，其中日期范围为
 2017/7/1 - 2017/7/31，11个推广计划，70个推广单元，1287个关键词，百度推广账户层级由大到小的顺序是：计划>单元>关键词。
 
 ```{r }
-sem %>% group_by(推广计划, 推广单元) %>% 
-  summarise(关键词数量 = n_distinct(关键词)) %>% 
-  DT::datatable(rownames = FALSE, option = list())
+sem %>% group_by(plan, unit) %>% 
+  summarise(count = n_distinct(keywords)) %>% 
+  DT::datatable(colnames = c("推广计划", "推广单元", "关键词数量"),
+                rownames = FALSE, option = list())
 ```
 <br>
 <hr>
 
-相同的关键词可能会出现在不同的推广计划／单元，不同的关键词投放的时间也不尽相同。下图是关键词投放天数的数量分布，红色虚线表示50%的关键词投放天数不足15天，黑色虚线表示相应投放天数的关键词的平均展现数量。
+相同的关键词可能会出现在不同的推广计划/单元，不同的关键词投放的时间也不尽相同。下图是关键词投放天数的数量分布，红色虚线表示50%的关键词投放天数不足15天，黑色虚线表示相应投放天数的关键词的平均展现数量。
 
 ```{r}
-sem %>% group_by(关键词) %>% 
-  summarise(day = n_distinct(date), display = sum(展现)) %>% 
-  mutate(avg_day_display = round(display/day)) %>% 
+# group by keywords
+dat <- sem %>% 
+  group_by(keywords) %>% 
+  summarise(day = n_distinct(date), display = sum(display),
+            click = sum(click), cost = sum(cost), ctr = click/display * 100) %>% 
+  mutate(avg_day_display = round(display/day))
+
+
+dat %>% 
   group_by(day) %>% 
-  summarise(count = n_distinct(关键词), avg = round(mean(avg_day_display))) %>% 
+  summarise(count = n_distinct(keywords), avg = round(mean(avg_day_display))) %>% 
   ggplot(aes(x = day)) + 
   geom_bar(aes(y = count), stat = "identity") +
   geom_line(aes(y = avg), linetype = "dashed") +
@@ -57,9 +70,10 @@ sem %>% group_by(关键词) %>%
 观察关键词随时间变化的量化指标趋势如下：
 
 ```{r}
+# group by date
 sem %>% group_by(date) %>% 
-  summarise(display = sum(展现),
-            click = sum(点击), cost = sum(消费)) %>% 
+  summarise(display = sum(display),
+            click = sum(click), cost = sum(cost)) %>% 
   mutate(ctr = round(click/display, 4) * 100) %>% 
   tidyr::gather(var, count, -date) %>%
   mutate(var = factor(var, levels = c("display", "click", "ctr", "cost"), ordered = TRUE)) %>%
@@ -68,7 +82,7 @@ sem %>% group_by(date) %>%
     geom_smooth(method = "lm", se = FALSE, lty = 3, col = "royalblue") +
     facet_wrap(~var, scales = "free_y", 
                labeller = as_labeller(c(display = "Displays", click = "Clicks", 
-                                        cost = "Costs", ctr = "CTR")))
+                                        cost = "Costs", ctr = "CTR(%)")))
 
 ```
 
@@ -78,20 +92,20 @@ sem %>% group_by(date) %>%
 
 ## 按展现量筛选
 
-关键词的展现次数表示被搜索展示的次数，观察关键词展现量的分布如下：
+关键词的展现次数表示被搜索展示的次数，观察关键词展现量的分布如下，展现量超过5万的两个关键词分别为 **"airbnb"** 和 **"airbnb 中文"**。
 
 ```{r}
-sem %>% group_by(关键词) %>% 
-  summarise(display = sum(展现)) %>% 
-  ggplot(aes(x = display)) + geom_histogram(bins = 50)
+dat %>% 
+  ggplot(aes(x = display)) + geom_histogram(bins = 80) +
+  geom_vline(xintercept = 6, colour = "darkblue", linetype = "dashed") +
+  geom_vline(xintercept = 24, colour = "darkred", linetype = "dashed")
 
 ```
 
 展现量呈现极端右偏分布，90%的关键词展现数量分布集中在1000以下。
 
 ```{r}
-sem %>% group_by(关键词) %>% 
-  summarise(display = sum(展现)) %>% 
+dat %>% 
   select(display) %>% 
   lapply(quantile, probs = c(0.25, 0.5, 0.75, 0.9, 0.95)) %>% 
   as.data.frame() %>% t() %>% 
@@ -100,56 +114,112 @@ sem %>% group_by(关键词) %>%
 <hr>
 
 ```{r}
-sem %>% group_by(关键词) %>% 
-  summarise(display = sum(展现)) %>% 
+dat %>% 
   filter(display < 100) %>% 
-  ggplot(aes(x = display)) + geom_histogram(bins = 50) +
+  ggplot(aes(x = display)) + geom_histogram(bins = 80) +
   geom_vline(xintercept = 6, colour = "darkblue", linetype = "dashed") +
   geom_vline(xintercept = 24, colour = "darkred", linetype = "dashed")
 ```
 
-蓝色虚线为30%分位数（展现量为6），红色为50%分位数（展现量为24）。7月整体投放的所有关键词中有一半的关键词展现量不足25。
+将左边集中的数据放大，蓝色虚线为30%分位数（展现量为6），红色为50%分位数（展现量为24）。7月整体投放的所有关键词中有一半的关键词被搜索展示的次数不到25次。
 
+<hr>
 ## 按点击率筛选
 
 将关键词中展现量排名靠后的30%剔除之后，观察点击率分布：
 
 ```{r}
-temp1 <- sem %>% group_by(key_words) %>% 
-  summarise(n = n_distinct(date),
-            display = sum(展现), click = sum(点击), 
-            cost = sum(消费), rate = click/display) %>% 
+res <- dat %>% 
   filter(display > 6)
 
-temp1 %>% 
-select(rate) %>% 
+res %>% 
+  mutate(`ctr(%)` = round(ctr, 2)) %>% 
+  select(`ctr(%)`) %>% 
   lapply(quantile, probs = c(0.25, 0.5, 0.75, 0.9, 0.95)) %>% 
   as.data.frame() %>% t() %>% 
   as.data.frame()
-
-temp1 %>% ggplot(aes(x = rate)) +
-  geom_histogram(bins = 50) +
-  geom_vline(xintercept = 0.033364226, colour = "darkred", linetype = "dashed")
-  
 ```
 <hr>
+```{r}
+res %>% ggplot(aes(x = ctr)) +
+  geom_histogram(bins = 80) +
+  geom_vline(xintercept = 3.3364226, colour = "darkred", linetype = "dashed") +
+  xlab("ctr(%)")
+  
+```
 
 点击率同样呈现右偏分布，红色虚线处是50%分位数，表明一半以上的关键词点击率不足5%。
 
+<hr>
 ## 结果展示
 
 先后通过展现和点击剔除数值较低的关键词，最终得到450个关键词。其中点击量超过30的关键词如下：
 
 ```{r}
-temp2 <- temp1 %>% filter(rate > 0.033364226) %>% 
-  mutate(rate = round(rate, 4)) %>% 
+res <- res %>% filter(ctr > 3.3364226) %>% 
+  mutate(ctr = round(ctr, 2)) %>% 
   arrange(desc(click)) 
 
-wordcloud(temp2$key_words, temp2$click, min.freq = 30, colors = brewer.pal(8, "Dark2"), family = "STXihei")
+wordcloud(res$keywords, res$click, min.freq = 30, colors = brewer.pal(8, "Dark2"), family = "STXihei")
 
 
 ```
-> *其他关键词详见附件*
+<hr>
+450个保留关键词的天数分布和日均点击量如下图, 黑色虚线峰值所表示的日均点击量高的关键词基本被保留，红色虚线表示50%的关键词投放天数在22天以上。
+
+```{r}
+res %>% group_by(day) %>% 
+  summarise(count = n_distinct(keywords), avg = round(mean(avg_day_display))) %>% 
+  ggplot(aes(x = day)) + 
+  geom_bar(aes(y = count), stat = "identity") +
+  geom_line(aes(y = avg), linetype = "dashed") +
+  geom_vline(xintercept = 22, colour = "darkred", linetype = "dashed")
+```
+<hr>
+保留关键词的展现量分布如下图，数据仍然右偏，但中位数提高到68，点击量最高的关键词为 **住百家**。
+
+```{r}
+res %>% #filter(display < 500) %>%
+  ggplot(aes(display)) + 
+  geom_histogram(bins = 80) +
+  geom_vline(xintercept = 68, colour = "darkred", linetype = "dashed")
+
+```
+<hr>
+保留关键词的点击率分布如下，红色虚线表示平均点击率由之前的3%提高到7%。
+
+```{r}
+res %>% ggplot(aes(ctr)) + 
+  geom_histogram(bins = 80) +
+  geom_vline(xintercept = 7.14, colour = "darkred", linetype = "dashed") +
+  xlab("ctr(%)")
+
+```
+<hr>
+如果进一步对关键词的点击率和价格综合考量，筛选点击率在10%以上且价格在1000元以下的关键词如图红色虚线左上部分。
+
+```{r}
+res %>% ggplot(aes(cost, ctr)) + 
+  geom_point(position = position_jitter(height = 0.01), alpha = 0.5) +
+  geom_hline(yintercept = 10, colour = "darkred", linetype = "dashed") +
+  geom_vline(xintercept = 1000, colour = "darkred", linetype = "dashed")
+```
+
+<hr>
+最终可以选择146个关键词展示如下：
+
+```{r}
+res_strict <- res %>% filter(ctr >= 10 & cost <= 1000)
+
+wordcloud(res_strict$keywords, res_strict$click, random.order = FALSE, colors = brewer.pal(8, "Dark2"), family = "STXihei")
+
+```
+
+```{r}
+write.csv(res_strict, "res_keywords.csv")
+```
+
+>*其他关键词详见附件*
 
 
 
