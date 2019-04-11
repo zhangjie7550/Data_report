@@ -1,0 +1,41 @@
+---
+title: "Ninja2"
+author: "张介"
+date: "2019/4/11"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, cache = TRUE, fig.showtext = TRUE)
+library(tidyverse)
+library(ggthemes)
+library(lubridate)
+
+library(RColorBrewer)
+library(gridExtra)
+library(showtext)
+
+set.seed(666)
+
+# set theme
+old <- theme_get()
+new <- theme_set(theme_tufte() + theme(text = element_text(family = "Noto Sans CJK SC"),
+                                       legend.position = "bottom"))
+# read data
+profile <- read_csv("exam/profile.csv") %>% as_tibble()
+```
+
+## test
+
+**Yeah Buddy!**  
+**Light Weight!**  
+
+<br>
+
+```{r histogram}
+# distribution of age
+profile %>% 
+  ggplot(aes(x = age)) +
+  geom_histogram(binwidth = 1)
+```
+
